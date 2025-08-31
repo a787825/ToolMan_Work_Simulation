@@ -2,6 +2,7 @@
   "rewrites": [
     { "source": "/", "destination": "/html_demo_panel_slope_over_drains.html" },
     { "source": "/demo", "destination": "/html_demo_panel_slope_over_drains.html" }
+    { "source": "/waterflow", "destination": "/SandBase.html" }
   ],
   "headers": [
     {
