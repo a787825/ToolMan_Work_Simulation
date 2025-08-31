@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>French Drain – Canvas + Three.js</title>
+  <style>
+    html,body{margin:0;height:100%;background:#f0f0f0;font-family:system-ui}
+    #view{display:block;width:100%;height:100%}
+    .hud{position:fixed;left:10px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;padding:6px 8px;border-radius:8px;font-size:12px}
+    .panel{position:fixed;top:10px;left:10px;background:rgba(255,255,255,0.92);padding:10px 12px;border-radius:10px;font-size:12px;border:1px solid #ddd;max-width:300px}
+    .panel h3{margin:0 0 6px 0;font-size:14px}
+    .panel label{display:flex;gap:8px;align-items:center;margin:6px 0}
+    .panel input[type=range]{flex:1}
+    .panel .val{width:40px;text-align:right}
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div class="panel">
+    <h3>顆粒控制</h3>
+    <div><strong>綠色帶（壕溝內，下 6 單位）</strong></div>
+    <label>密度 <input id="greenCount" type="range" min="50" max="1200" step="10" value="500"><span id="greenCountV" class="val">500</span></label>
+    <label>大小 <input id="greenSize" type="range" min="0.05" max="0.30" step="0.01" value="0.12"><span id="greenSizeV" class="val">0.12</span></label>
+    <div style="margin-top:6px"><strong>紅色帶（管上方 4 單位，顆粒必 < 綠色）</strong></div>
+    <label>密度 <input id="redCount" type="range" min="20" max="2000" step="10" value="160"><span id="redCountV" class="val">160</span></label>
+    <label>大小 <input id="redSize" type="range" min="0.05" max="0.60" step="0.01" value="0.30"><span id="redSizeV" class="val">0.30</span></label>
+    <hr>
+    <h3>水滴控制</h3>
+    <label>大小 <input id="dropSize" type="range" min="0.05" max="0.5" step="0.01" value="0.15"><span id="dropSizeV" class="val">0.15</span></label>
+    <label>初速 <input id="dropSpeed" type="range" min="0.1" max="3.0" step="0.05" value="1.2"><span id="dropSpeedV" class="val">1.2</span></label>
+    <label>彈性 <input id="dropRestitution" type="range" min="0.00" max="0.90" step="0.05" value="0.30"><span id="dropRestitutionV" class="val">0.30</span></label>
+    <label>摩擦 <input id="dropFriction" type="range" min="0.00" max="0.90" step="0.05" value="0.20"><span id="dropFrictionV" class="val">0.20</span></label>
+  </div>
+  <div class="hud">滑鼠拖曳旋轉，滾輪縮放。</div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ===== 場景參數 =====
+    const SOIL_W = 5, TRENCH_W = 2, DEPTH = 10, LENGTH = 12;
+    const PIPE_R = 0.5;
+
+    // ===== Three 基本設置 =====
+    const canvas = document.getElementById('view');
+    const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf0f0f0);
+
+    const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 1000);
+    camera.position.set(10, 8, 15);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI/2;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(5, 10, 7.5);
+    scene.add(dir);
+
+    // ===== 材質 =====
+    const matSoil   = new THREE.MeshStandardMaterial({color:0x9B7653, transparent:true, opacity:0.4});
+    const matGrass  = new THREE.MeshStandardMaterial({color:0x228B22});
+    const matPipe   = new THREE.MeshStandardMaterial({color:0xffffff, metalness:0.2, roughness:0.1});
+    const matRed    = new THREE.MeshStandardMaterial({color:0x888888, roughness:0.8});
+    const matGreen  = new THREE.MeshStandardMaterial({color:0x555555, roughness:0.5});
+    const matDrop   = new THREE.MeshStandardMaterial({color:0xff0000});
+
+    // ===== 幾何：土壤、草皮、管 =====
+    const gSoil = new THREE.BoxGeometry(SOIL_W, DEPTH, LENGTH);
+    const soilL = new THREE.Mesh(gSoil, matSoil); soilL.position.set(-(SOIL_W/2 + TRENCH_W/2), -DEPTH/2, 0); scene.add(soilL);
+    const soilR = new THREE.Mesh(gSoil, matSoil); soilR.position.set( (SOIL_W/2 + TRENCH_W/2), -DEPTH/2, 0); scene.add(soilR);
+
+    const grass = new THREE.Mesh(new THREE.BoxGeometry(SOIL_W*2 + TRENCH_W, 0.2, LENGTH), matGrass);
+    grass.position.set(0, 0.1, 0); scene.add(grass);
+
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(PIPE_R, PIPE_R, LENGTH, 32), matPipe);
+    pipe.rotation.x = Math.PI/2; pipe.position.set(0, -DEPTH + PIPE_R*2, 0); scene.add(pipe);
+
+    // ===== 顆粒帶生成與資料（用於碰撞） =====
+    function generatePositions(count, radius, sampler){
+      const MIN = 2.02 * radius; // 最小中心距，避免重疊
+      const pts = []; let tries = 0; const LIMIT = count*120; // 提高嘗試提升密度
+      while(pts.length < count && tries < LIMIT){
+        const p = sampler();
+        let ok = true;
+        for(const q of pts){ if(p.distanceTo(q) < MIN){ ok=false; break; } }
+        if(ok) pts.push(p);
+        tries++;
+      }
+      return pts;
+    }
+
+    let greenMesh, redMesh;
+    let greenBodies = [], redBodies = [];// {p:Vector3, r:number}
+
+    function createGreen(count, size){
+      if(greenMesh){ scene.remove(greenMesh); greenMesh.geometry.dispose(); }
+      const geo = new THREE.IcosahedronGeometry(size, 0);
+      const positions = generatePositions(count, size, () => {
+        const x = (Math.random()-0.5)*TRENCH_W*0.9;
+        const y = -DEPTH + 0.4 + Math.random()*6.0;
+        const z = (Math.random()-0.5)*LENGTH*0.9;
+        return new THREE.Vector3(x,y,z);
+      });
+      greenBodies = positions.map(p=>({p, r:size}));
+      greenMesh = new THREE.InstancedMesh(geo, matGreen, positions.length);
+      const m = new THREE.Matrix4();
+      positions.forEach((p,i)=>{ m.makeRotationFromEuler(new THREE.Euler(Math.random()*Math.PI,Math.random()*Math.PI,Math.random()*Math.PI)); m.setPosition(p); greenMesh.setMatrixAt(i,m); });
+      scene.add(greenMesh);
+      buildSpatialIndex();
+    }
+
+    function createRed(count, size){
+      if(redMesh){ scene.remove(redMesh); redMesh.geometry.dispose(); }
+      const geo = new THREE.IcosahedronGeometry(size, 0);
+      const positions = generatePositions(count, size, () => {
+        const x = (Math.random()-0.5)*TRENCH_W*0.9;
+        const y = -DEPTH + 6.0 + Math.random()*4.0;
+        const z = (Math.random()-0.5)*LENGTH*0.9;
+        return new THREE.Vector3(x,y,z);
+      });
+      redBodies = positions.map(p=>({p, r:size}));
+      redMesh = new THREE.InstancedMesh(geo, matRed, positions.length);
+      const m = new THREE.Matrix4();
+      positions.forEach((p,i)=>{ m.makeRotationFromEuler(new THREE.Euler(Math.random()*Math.PI,Math.random()*Math.PI,Math.random()*Math.PI)); m.setPosition(p); redMesh.setMatrixAt(i,m); });
+      scene.add(redMesh);
+      buildSpatialIndex();
+    }
+
+    // ===== 簡易空間雜湊以加速碰撞查詢 =====
+    const cellSize = 0.8;
+    let grid = new Map(); // key => array of bodies
+    function keyFromV(v){ return `${Math.floor(v.x/cellSize)},${Math.floor(v.y/cellSize)},${Math.floor(v.z/cellSize)}`; }
+    function buildSpatialIndex(){
+      grid = new Map();
+      const all = greenBodies.concat(redBodies);
+      for(const b of all){
+        const k = keyFromV(b.p);
+        if(!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(b);
+      }
+    }
+    function queryNeighbors(pos){
+      const out = [];
+      const cx = Math.floor(pos.x/cellSize), cy = Math.floor(pos.y/cellSize), cz = Math.floor(pos.z/cellSize);
+      for(let dx=-1; dx<=1; dx++) for(let dy=-1; dy<=1; dy++) for(let dz=-1; dz<=1; dz++){
+        const k = `${cx+dx},${cy+dy},${cz+dz}`;
+        const arr = grid.get(k); if(arr) out.push(...arr);
+      }
+      return out;
+    }
+
+    // ===== 水滴物理 =====
+    const drops = [];
+    function spawnDrop(){
+      const r = parseFloat(ui.dropSize.value);
+      const geo = new THREE.SphereGeometry(r, 16, 16);
+      const mesh = new THREE.Mesh(geo, matDrop);
+      mesh.position.set((Math.random()-0.5)*TRENCH_W*0.5, 2.0, (Math.random()-0.5)*LENGTH*0.4);
+      scene.add(mesh);
+      const v0 = new THREE.Vector3(0, -parseFloat(ui.dropSpeed.value), 0);
+      drops.push({mesh, r, v:v0});
+    }
+    let spawnTimer = 0; const spawnInterval = 0.5; // 秒
+
+    function collideSphereDrop(body, d, restitution, friction){
+      const n = new THREE.Vector3().subVectors(d.mesh.position, body.p);
+      const dist = n.length();
+      const minDist = d.r + body.r;
+      if(dist >= minDist || dist === 0) return;
+      n.divideScalar(dist);
+      // 位置校正：把水滴推出重疊區
+      const pen = minDist - dist + 1e-4;
+      d.mesh.position.addScaledVector(n, pen);
+      // 速度分解
+      const v = d.v;
+      const vn = n.clone().multiplyScalar(v.dot(n)); // 法向分量
+      const vt = v.clone().sub(vn);                  // 切向分量
+      // 反射 + 彈性
+      const vnAfter = vn.multiplyScalar(-restitution);
+      // 切向摩擦（滑動）
+      const vtAfter = vt.multiplyScalar(1 - friction);
+      d.v = vnAfter.add(vtAfter);
+    }
+
+    function updateDrops(dt){
+      const g = 3.5; // 重力加速度（場景尺度）
+      const restitution = parseFloat(ui.dropRestitution.value);
+      const friction = parseFloat(ui.dropFriction.value);
+      const drag = 0.02; // 空氣阻力
+
+      // 生成
+      spawnTimer += dt;
+      while(spawnTimer >= spawnInterval){ spawnDrop(); spawnTimer -= spawnInterval; }
+
+      for(let i=0;i<drops.length;i++){
+        const d = drops[i];
+        // 半徑隨 UI 即時變（重建幾何避免失真）
+        const rUI = parseFloat(ui.dropSize.value);
+        if(Math.abs(rUI - d.r) > 1e-3){
+          d.r = rUI;
+          d.mesh.geometry.dispose();
+          d.mesh.geometry = new THREE.SphereGeometry(d.r, 16, 16);
+        }
+        // 重力與空阻
+        d.v.y -= g * dt;
+        d.v.multiplyScalar(1 - drag);
+        // 穿越顆粒的碰撞
+        const neigh = queryNeighbors(d.mesh.position);
+        for(const b of neigh){ collideSphereDrop(b, d, restitution, friction); }
+        // 穿越管道：若進入管道附近則移除（視為排出）
+        const yPipeTop = -DEPTH + PIPE_R*2 + 0.2;
+        if(d.mesh.position.y <= yPipeTop && Math.abs(d.mesh.position.x) < TRENCH_W/2 && Math.abs(d.mesh.position.z) < LENGTH/2){
+          scene.remove(d.mesh); drops.splice(i,1); i--; continue;
+        }
+        // 穿越壕溝底界
+        const yMin = -DEPTH - 0.5;
+        if(d.mesh.position.y < yMin){ scene.remove(d.mesh); drops.splice(i,1); i--; continue; }
+        // 積分
+        d.mesh.position.addScaledVector(d.v, dt);
+      }
+    }
+
+    // ===== UI =====
+    const ui = {
+      redCount: document.getElementById('redCount'), redSize: document.getElementById('redSize'),
+      greenCount: document.getElementById('greenCount'), greenSize: document.getElementById('greenSize'),
+      redCountV: document.getElementById('redCountV'), redSizeV: document.getElementById('redSizeV'),
+      greenCountV: document.getElementById('greenCountV'), greenSizeV: document.getElementById('greenSizeV'),
+      dropSize: document.getElementById('dropSize'), dropSpeed: document.getElementById('dropSpeed'),
+      dropSizeV: document.getElementById('dropSizeV'), dropSpeedV: document.getElementById('dropSpeedV'),
+      dropRestitution: document.getElementById('dropRestitution'), dropFriction: document.getElementById('dropFriction'),
+      dropRestitutionV: document.getElementById('dropRestitutionV'), dropFrictionV: document.getElementById('dropFrictionV')
+    };
+    function syncVals(){
+      ui.redCountV.textContent = ui.redCount.value;
+      ui.redSizeV.textContent  = Number(ui.redSize.value).toFixed(2);
+      ui.greenCountV.textContent = ui.greenCount.value;
+      ui.greenSizeV.textContent  = Number(ui.greenSize.value).toFixed(2);
+      ui.dropSizeV.textContent = Number(ui.dropSize.value).toFixed(2);
+      ui.dropSpeedV.textContent = Number(ui.dropSpeed.value).toFixed(2);
+      ui.dropRestitutionV.textContent = Number(ui.dropRestitution.value).toFixed(2);
+      ui.dropFrictionV.textContent = Number(ui.dropFriction.value).toFixed(2);
+    }
+
+    function clampSizes(){
+      const eps = 0.01;
+      let r = parseFloat(ui.redSize.value);
+      let g = parseFloat(ui.greenSize.value);
+      if(r >= g - eps){ ui.redSize.value = (g - eps).toFixed(2); }
+    }
+
+    function rebuild(){
+      clampSizes();
+      syncVals();
+      createGreen(parseInt(ui.greenCount.value,10), parseFloat(ui.greenSize.value));
+      createRed(parseInt(ui.redCount.value,10), parseFloat(ui.redSize.value));
+    }
+    ['input','change'].forEach(ev=>{
+      ui.redCount.addEventListener(ev,rebuild);
+      ui.redSize.addEventListener(ev,rebuild);
+      ui.greenCount.addEventListener(ev,rebuild);
+      ui.greenSize.addEventListener(ev,rebuild);
+      ui.dropSize.addEventListener(ev,syncVals);
+      ui.dropSpeed.addEventListener(ev,syncVals);
+      ui.dropRestitution.addEventListener(ev,syncVals);
+      ui.dropFriction.addEventListener(ev,syncVals);
+    });
+
+    rebuild(); syncVals();
+
+    // ===== 主迴圈（含 dt） =====
+    let prev = performance.now();
+    function loop(now){
+      const dt = Math.min(0.033, (now - prev)/1000);
+      prev = now;
+      controls.update();
+      updateDrops(dt);
+      renderer.render(scene,camera);
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    addEventListener('resize', ()=>{ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+  </script>
+</body>
+</html>
